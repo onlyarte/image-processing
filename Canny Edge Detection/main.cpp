@@ -154,7 +154,7 @@ Mat canny(const Mat src){
     prev = next;
     next = Mat(Size(nc, nr), CV_8UC1);
 
-    //trace edges with hysteresis
+    // 4. TRACE EDGES WITH HYSTERESIS
     vector<int> edges(nc*nr/2);
     const int tmin = 150, tmax = 200;
     int c = 1;
