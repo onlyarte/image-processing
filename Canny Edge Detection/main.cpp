@@ -61,7 +61,7 @@ Mat gauss(const Mat &src){
     return res;
 }
 
-//for sobel filter
+//return x-gradient value after applying sobel x-matrix to neighbour pixels
 int xGradient(Mat image, int x, int y)
 {
     return image.at<uchar>(y-1, x-1) +
@@ -72,7 +72,7 @@ int xGradient(Mat image, int x, int y)
                     image.at<uchar>(y+1, x+1);
 }
 
-//for sobel filter
+//return y-gradient value after applying sobel y-matrix to neighbour pixels
 int yGradient(Mat image, int x, int y)
 {
     return image.at<uchar>(y-1, x-1) +
@@ -84,62 +84,112 @@ int yGradient(Mat image, int x, int y)
 }
 
 //Canny edge detection
-Mat canny(Mat src){
-    //create new image
-    Mat res(Size(src.cols, src.rows), CV_8UC1);
-
+Mat canny(const Mat src){
     //check input
     if (src.data == 0){
         cout << "Wrong data" << endl;
-        return res;
+        return src;
     }
+    //number of cols/rows
+    unsigned int nc = src.cols,
+        nr = src.rows;
+    //create new images
+    Mat prev(Size(nc, nr), CV_8UC1),
+        next(Size(nc, nr), CV_8UC1);
+
+    //copy data to start image
+    for(int i = 0; i < nc*nr; i++)
+        prev.data[i] = src.data[i];
 
     // 1. APPLY GAUSS FILTER
-    src = gauss(src);
+    prev = gauss(prev);
 
     // 2. APPLY SOBEL FILTER
     //save gradients to vector
-    vector<int> gxs(res.rows*res.cols);
-    vector<int> gys(res.rows*res.cols);
+    vector<int> gxs(nc*nr);
+    vector<int> gys(nc*nr);
     //for each pixel find gradients and new values
     double gx, gy, sum;
-    for(int y = 1; y < src.rows - 1; y++){
-        for(int x = 1; x < src.cols - 1; x++){
-            gx = xGradient(src, x, y);
-            gy = yGradient(src, x, y);
+    for(int y = 1; y < nr - 1; y++){
+        for(int x = 1; x < nc - 1; x++){
+            gx = xGradient(prev, x, y);
+            gy = yGradient(prev, x, y);
             sum = abs(gx) + abs(gy);
-            sum = sum > 255 ? 255:sum;
+            //if out of bounds
+            sum = sum > 255 ? 255 : sum;
             sum = sum < 0 ? 0 : sum;
-            res.at<uchar>(y,x) = sum;
+            //rewrite pixel value
+            next.at<uchar>(y,x) = sum;
+            //save for non-maximum suppression
             gxs.push_back(abs(gx)); gys.push_back(abs(gy));
         }
     }
+    prev = next;
 
     // 3. NON-MAXIMUM SUPPRESSION
-    for (int i = 1; i < res.rows - 1; i++){
-        for (int j = 1; j < res.cols - 1; j++){
-            const int c = i + res.rows * j,
-                nn = c - res.rows, ss = c + res.rows,
+    for (int i = 1; i < nr - 1; i++){
+        for (int j = 1; j < nc - 1; j++){
+            //find current location of neighbour pixels: nn - north, ne - north east
+            const int c = i + nr * j,
+                nn = c - nr, ss = c + nr,
                 ww = c + 1, ee = c - 1,
                 nw = nn + 1, ne = nn - 1,
                 sw = ss + 1, se = ss - 1;
-
+            //indicate direction using sobel gradient and rounding it to fit 1-8 measures
             const float dir = (float)(fmod(atan2(gys[c],
                                                  gxs[c]) + M_PI,
                                            M_PI) / M_PI) * 8;
-
-            if (!(((dir <= 1 || dir > 7) && res.data[c] > res.data[ee] &&
-                 res.data[c] > res.data[ww]) || // 0 deg
-                ((dir > 1 && dir <= 3) && res.data[c] > res.data[nw] &&
-                 res.data[c] > res.data[se]) || // 45 deg
-                ((dir > 3 && dir <= 5) && res.data[c] > res.data[nn] &&
-                 res.data[c] > res.data[ss]) || // 90 deg
-                ((dir > 5 && dir <= 7) && res.data[c] > res.data[ne] &&
-                 res.data[c] > res.data[sw])))   // 135 deg
-                res.data[c] = 0;
+            //if non-maximum then remove
+            if (!(((dir <= 1 || dir > 7) && prev.data[c] > prev.data[ee] &&
+                 prev.data[c] > prev.data[ww]) || // 0 deg
+                ((dir > 1 && dir <= 3) && prev.data[c] > prev.data[nw] &&
+                 prev.data[c] > prev.data[se]) || // 45 deg
+                ((dir > 3 && dir <= 5) && prev.data[c] > prev.data[nn] &&
+                 prev.data[c] > prev.data[ss]) || // 90 deg
+                ((dir > 5 && dir <= 7) && prev.data[c] > prev.data[ne] &&
+                 prev.data[c] > prev.data[sw])))   // 135 deg
+                next.data[c] = 0;
         }
     }
-    return res;
+    prev = next;
+    next = Mat(Size(nc, nr), CV_8UC1);
+
+    //trace edges with hysteresis
+    vector<int> edges(nc*nr/2);
+    const int tmin = 150, tmax = 200;
+    int c = 1;
+    for (int j = 1; j < nc - 1; j++)
+        for (int i = 1; i < nr - 1; i++) {
+            if (prev.data[c] >= tmax && next.data[c] == 0) { // trace edges
+                next.data[c] = 255;
+                int nedges = 1;
+                edges[0] = c;
+
+                do {
+                    nedges--;
+                    const int t = edges[nedges];
+
+                    int nbs[8]; // neighbours
+                    nbs[0] = t - nr;     // nn
+                    nbs[1] = t + nr;     // ss
+                    nbs[2] = t + 1;      // ww
+                    nbs[3] = t - 1;      // ee
+                    nbs[4] = nbs[0] + 1; // nw
+                    nbs[5] = nbs[0] - 1; // ne
+                    nbs[6] = nbs[1] + 1; // sw
+                    nbs[7] = nbs[1] - 1; // se
+                    //join neighbour if its value more then min and not joined yet
+                    for (int k = 0; k < 8; k++)
+                        if (prev.data[nbs[k]] >= tmin && next.data[nbs[k]] == 0) {
+                            next.data[nbs[k]] = 255;
+                            edges[nedges] = nbs[k];
+                            nedges++;
+                        }
+                } while (nedges > 0);
+            }
+            c++;
+        }
+    return next;
 }
 
 int main()
